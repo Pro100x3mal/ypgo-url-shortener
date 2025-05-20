@@ -14,9 +14,9 @@ const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 const shortURLLength = 8
 const scheme = "http"
 
-var emptyOriginalURL = errors.New("original url is empty")
-var emptyShortURL = errors.New("short url is empty")
-var notExistShortURL = errors.New("this short url is not exist")
+var errEmptyOriginalURL = errors.New("original url is empty")
+var errEmptyShortURL = errors.New("short url is empty")
+var errNotExistShortURL = errors.New("this short url is not exist")
 
 var urlStore = make(map[string]string)
 
@@ -74,7 +74,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 
 func saveShortURL(originalURL string) (string, error) {
 	if len(originalURL) == 0 {
-		return "", emptyOriginalURL
+		return "", errEmptyOriginalURL
 	}
 	shortURL, exist := urlStore[originalURL]
 	if !exist {
@@ -87,14 +87,14 @@ func saveShortURL(originalURL string) (string, error) {
 
 func getOriginalURL(id string) (string, error) {
 	if len(id) == 0 {
-		return "", emptyShortURL
+		return "", errEmptyShortURL
 	}
 	for originalURL, shortURL := range urlStore {
 		if shortURL == id {
 			return originalURL, nil
 		}
 	}
-	return "", notExistShortURL
+	return "", errNotExistShortURL
 }
 
 func genRandomString(n int) string {
