@@ -57,11 +57,6 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getHandler(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
 	id := r.URL.Path[1:]
 	originalURL, err := getOriginalURL(id)
 	if err != nil {
@@ -117,5 +112,4 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 }
