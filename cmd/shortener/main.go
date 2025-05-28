@@ -3,35 +3,94 @@ package main
 import (
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"math/big"
 	"net/http"
 	"net/url"
+	"sync"
 )
 
 const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 const shortURLLength = 8
 const scheme = "http"
 
-var errEmptyOriginalURL = errors.New("original url is empty")
-var errEmptyShortURL = errors.New("short url is empty")
-var errNotExistShortURL = errors.New("this short url is not exist")
+var errEmptyOriginalURL = errors.New("original URL is empty")
+var errInvalidOriginalURL = errors.New("invalid URL")
+var errEmptyShortURL = errors.New("short URL is empty")
+var errNotExistShortURL = errors.New("short URL does not exist")
 
-var urlStore = make(map[string]string)
+type URLStore struct {
+	mu              sync.RWMutex
+	originalToShort map[string]string
+	shortToOriginal map[string]string
+}
 
-func rootHandler(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodPost:
-		postHandler(w, r)
-	case http.MethodGet:
-		getHandler(w, r)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+func NewURLStore() *URLStore {
+	return &URLStore{
+		originalToShort: make(map[string]string),
+		shortToOriginal: make(map[string]string),
 	}
 }
 
-func postHandler(w http.ResponseWriter, r *http.Request) {
+var store = NewURLStore()
+
+func (s *URLStore) Save(originalURL string) (string, error) {
+	if len(originalURL) == 0 {
+		return "", errEmptyOriginalURL
+	}
+
+	_, err := url.ParseRequestURI(originalURL)
+	if err != nil {
+		return "", errInvalidOriginalURL
+	}
+
+	s.mu.RLock()
+	shortURL, exists := s.originalToShort[originalURL]
+	s.mu.RUnlock()
+
+	if exists {
+		return shortURL, nil
+	}
+
+	for {
+		shortURL, err = genRandomString(shortURLLength)
+		if err != nil {
+			return "", err
+		}
+		s.mu.RLock()
+		_, exists = s.shortToOriginal[shortURL]
+		s.mu.RUnlock()
+
+		if !exists {
+			break
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.originalToShort[originalURL] = shortURL
+	s.shortToOriginal[shortURL] = originalURL
+
+	return shortURL, nil
+}
+
+func (s *URLStore) Get(shortURL string) (string, error) {
+	if len(shortURL) == 0 {
+		return "", errEmptyShortURL
+	}
+	s.mu.RLock()
+	originalURL, exists := s.shortToOriginal[shortURL]
+	s.mu.RUnlock()
+
+	if exists {
+		return originalURL, nil
+	}
+
+	return "", errNotExistShortURL
+}
+
+func saveShortURLHandler(w http.ResponseWriter, r *http.Request) {
 	originalURL, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -39,7 +98,7 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	id, err := saveShortURL(string(originalURL))
+	id, err := store.Save(string(originalURL))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -56,9 +115,9 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(shortURL.String()))
 }
 
-func getHandler(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Path[1:]
-	originalURL, err := getOriginalURL(id)
+func getOrigURLHandler(w http.ResponseWriter, r *http.Request) {
+	shortURL := r.URL.Path[1:]
+	originalURL, err := store.Get(shortURL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -67,46 +126,22 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, originalURL, http.StatusTemporaryRedirect)
 }
 
-func saveShortURL(originalURL string) (string, error) {
-	if len(originalURL) == 0 {
-		return "", errEmptyOriginalURL
-	}
-	shortURL, exist := urlStore[originalURL]
-	if !exist {
-		shortURL = genRandomString(shortURLLength)
-		urlStore[originalURL] = shortURL
-		return shortURL, nil
-	}
-	return shortURL, nil
-}
-
-func getOriginalURL(id string) (string, error) {
-	if len(id) == 0 {
-		return "", errEmptyShortURL
-	}
-	for originalURL, shortURL := range urlStore {
-		if shortURL == id {
-			return originalURL, nil
-		}
-	}
-	return "", errNotExistShortURL
-}
-
-func genRandomString(n int) string {
+func genRandomString(n int) (string, error) {
 	randString := make([]byte, n)
 	for i := range randString {
 		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		if err != nil {
-			log.Fatal(err)
+			return "", fmt.Errorf("failed to generate random index for short URL: %w", err)
 		}
 		randString[i] = charset[num.Int64()]
 	}
-	return string(randString)
+	return string(randString), nil
 }
 
 func main() {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", rootHandler)
+	mux.HandleFunc("POST /", saveShortURLHandler)
+	mux.HandleFunc("GET /", getOrigURLHandler)
 
 	err := http.ListenAndServe(":8080", mux)
 	if err != nil {
